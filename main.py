@@ -1,3 +1,5 @@
+import hashlib
+
 from dotenv import load_dotenv
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -5,6 +7,7 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 import os
+from zoneinfo import ZoneInfo
 
 load_dotenv()
 app = FastAPI()
@@ -12,17 +15,30 @@ app = FastAPI()
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = 'HS256'
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+SERVER_TIME_ZONE = ZoneInfo('UTC')
 
 security = HTTPBearer()
+
+def hash_string(string):
+    textb = string.encode('utf-8')
+    hash = hashlib.sha256(textb)
+    hashs = hash.hexdigest()
+    return hashs
 
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    age: int
+
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str
 user_db = {
-    'admin' : 'secret'
+    'admin' : hash_string('secret')
 }
 async def token_to_payload(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
@@ -33,17 +49,36 @@ async def token_to_payload(credentials: HTTPAuthorizationCredentials = Depends(s
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Невалидный или просроченный токен"
         )
+    time = payload.get("exp")
+    datetime_exporation = datetime.fromtimestamp(time, tz = SERVER_TIME_ZONE)
+    datetime_now = datetime.now(tz=SERVER_TIME_ZONE)
+    if datetime_exporation < datetime_now:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail = 'Время жизни токена истекло'
+        )
     return payload
+
+
+@app.post('/auth/register')
+async def register(user: LoginRequest):
+    if user.username in user_db:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail = 'Такой username уже существует'
+        )
+    user_db[user.username] = hash_string(user.password)
 
 @app.post("/auth/login", response_model=LoginResponse)
 async def login_user(user: LoginRequest):
     password = user_db.get(user.username)
-    if not password or password != user.password:
+    user_password = hash_string(user.password)
+    if not password or password != user_password:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail = 'Неверный логин или пароль'
         )
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(tz=SERVER_TIME_ZONE) + timedelta(seconds=ACCESS_TOKEN_EXPIRE_MINUTES)
 
     payload = {
         "sub": user.username,
