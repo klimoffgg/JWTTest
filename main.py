@@ -38,7 +38,7 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str
 user_db = {
-    'admin' : hash_string('secret')
+    'admin' : {"password":hash_string('secret'), "age": 0}
 }
 async def token_to_payload(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
@@ -58,31 +58,34 @@ async def token_to_payload(credentials: HTTPAuthorizationCredentials = Depends(s
             detail = 'Время жизни токена истекло'
         )
     return payload
-
+@app.get('/age')
+async def age_calculate(payload: dict = Depends(token_to_payload)):
+    new_age = user_db[payload.get("sub")]["age"] + 10
+    return {"new_age": new_age}
 
 @app.post('/auth/register')
-async def register(user: LoginRequest):
+async def register(user: RegisterRequest):
     if user.username in user_db:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail = 'Такой username уже существует'
         )
-    user_db[user.username] = hash_string(user.password)
+    user_db[user.username] = {"password": hash_string(user.password), "age": user.age}
 
 @app.post("/auth/login", response_model=LoginResponse)
 async def login_user(user: LoginRequest):
-    password = user_db.get(user.username)
+    password = user_db.get(user.username)["password"]
     user_password = hash_string(user.password)
     if not password or password != user_password:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail = 'Неверный логин или пароль'
         )
-    expire = datetime.now(tz=SERVER_TIME_ZONE) + timedelta(seconds=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(tz=SERVER_TIME_ZONE) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
     payload = {
         "sub": user.username,
-        "exp": expire
+        "exp": expire,
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
     return LoginResponse(access_token=token, token_type = 'bearer')
