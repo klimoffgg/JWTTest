@@ -1,5 +1,5 @@
 import hashlib
-
+import database
 from dotenv import load_dotenv
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 load_dotenv()
 app = FastAPI()
+db = database.Database()
+db.load()
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = 'HS256'
@@ -37,9 +39,6 @@ class RegisterRequest(BaseModel):
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str
-user_db = {
-    'admin' : hash_string('secret')
-}
 async def token_to_payload(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     try:
@@ -58,31 +57,34 @@ async def token_to_payload(credentials: HTTPAuthorizationCredentials = Depends(s
             detail = 'Время жизни токена истекло'
         )
     return payload
-
+@app.get('/age')
+async def age_calculate(payload: dict = Depends(token_to_payload)):
+    new_age = db.get(payload.get("sub"))["age"] + 10
+    return {"new_age": new_age}
 
 @app.post('/auth/register')
-async def register(user: LoginRequest):
-    if user.username in user_db:
+async def register(user: RegisterRequest):
+    if db.exists(user.username):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail = 'Такой username уже существует'
         )
-    user_db[user.username] = hash_string(user.password)
+    db.set(user.username, {"password": hash_string(user.password), "age": user.age})
 
 @app.post("/auth/login", response_model=LoginResponse)
 async def login_user(user: LoginRequest):
-    password = user_db.get(user.username)
+    password = db.get(user.username)["password"]
     user_password = hash_string(user.password)
     if not password or password != user_password:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail = 'Неверный логин или пароль'
         )
-    expire = datetime.now(tz=SERVER_TIME_ZONE) + timedelta(seconds=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(tz=SERVER_TIME_ZONE) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
     payload = {
         "sub": user.username,
-        "exp": expire
+        "exp": expire,
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
     return LoginResponse(access_token=token, token_type = 'bearer')
